@@ -207,7 +207,7 @@ fun TacticalMap(
                     // not the contacts-src GeoJsonSource circle/symbol layers, which the
                     // GL driver silently fails to paint on Adreno/Mali/emulator (they show
                     // on Cesium but never on 2D). The Annotation path paints everywhere.
-                    ContactMarkerRenderer.update(map, context, bindings.contacts)
+                    ContactMarkerRenderer.update(map, ctx, bindings.contacts)
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingShapeRenderer.apply(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
@@ -216,7 +216,7 @@ fun TacticalMap(
                     // source stays empty until the plugin pushes into it.
                     if (currentLocationEnabled) {
                         activateLocation(
-                            map, style, context, currentUseMilStd, currentTeamColor,
+                            map, style, ctx, currentUseMilStd, currentTeamColor,
                             seedFix = bindings.selfFix, puck = puckAppearance,
                             selfMarkerTriangle = currentSelfMarkerTriangle,
                         )
@@ -245,7 +245,7 @@ fun TacticalMap(
                     // setCompassMargins(left, top, right, bottom) takes raw
                     // pixels; 4 dp matches MapLibre's built-in side defaults
                     // so only the top changes.
-                    val density = context.resources.displayMetrics.density
+                    val density = ctx.resources.displayMetrics.density
                     // Issue #89 — add the status-bar inset so the compass clears
                     // the ATAKStatusBar after enableEdgeToEdge pushes it down.
                     val compassTopPx =
@@ -377,7 +377,7 @@ fun TacticalMap(
                             // Contain a source-access race if yet another style
                             // load starts before this fully-loaded callback runs.
                             runCatching {
-                                ContactMarkerRenderer.update(map, context, bindings.contacts)
+                                ContactMarkerRenderer.update(map, ctx, bindings.contacts)
                                 MeasurementLayer.update(map, currentMeasurementPoints)
                                 DrawingShapeRenderer.apply(map, currentDrawings)
                                 currentGridCenter?.let { GridLayer.update(map, it) }
@@ -401,7 +401,7 @@ fun TacticalMap(
                 if (style?.isFullyLoaded == true && !map.locationComponent.isLocationComponentActivated) {
                     runCatching {
                         activateLocation(
-                            map, style, context, currentUseMilStd, currentTeamColor,
+                            map, style, appContext, currentUseMilStd, currentTeamColor,
                             seedFix = currentSelfFix, puck = puckAppearance,
                             selfMarkerTriangle = currentSelfMarkerTriangle,
                         )
@@ -435,7 +435,7 @@ fun TacticalMap(
                         if (puckAppearance.dimmed != staleNow) {
                             map.locationComponent.applyStyle(
                                 buildPuckOptions(
-                                    context, style, currentUseMilStd, currentTeamColor,
+                                    appContext, style, currentUseMilStd, currentTeamColor,
                                     dimmed = staleNow,
                                     selfMarkerTriangle = currentSelfMarkerTriangle,
                                 ),
@@ -553,7 +553,7 @@ fun TacticalMap(
             // getMapAsync block during MapView construction (line ~88).
             if (map.style != null && map.style?.json != styleJson) {
                 map.setStyle(Style.Builder().fromJson(styleJson)) { style ->
-                    ContactMarkerRenderer.update(map, context, currentContacts)
+                    ContactMarkerRenderer.update(map, appContext, currentContacts)
                     MeasurementLayer.update(map, currentMeasurementPoints)
                     DrawingShapeRenderer.apply(map, currentDrawings)
                     currentGridCenter?.let { GridLayer.update(map, it) }
@@ -568,7 +568,7 @@ fun TacticalMap(
                         runCatching {
                             map.locationComponent.applyStyle(
                                 buildPuckOptions(
-                                    context, style, currentUseMilStd, currentTeamColor,
+                                    appContext, style, currentUseMilStd, currentTeamColor,
                                     dimmed = puckAppearance.dimmed,
                                     selfMarkerTriangle = currentSelfMarkerTriangle,
                                 ),
@@ -704,7 +704,16 @@ fun TacticalMap(
                     mapView.onPause()
                 }
                 Lifecycle.Event.ON_STOP -> mapView.onStop()
-                Lifecycle.Event.ON_DESTROY -> mapView.onDestroy()
+                // MeshTAK: NEVER destroy the retained MapView from here. Under
+                // Navigation3 the LocalLifecycleOwner inside a nav entry is the
+                // ENTRY's lifecycle, which is DESTROYED on every bottom-nav tab
+                // switch — in NodeCast this observer only ever saw the Activity
+                // lifecycle, so onDestroy() meant "app is going away". Here it
+                // meant "user tapped another tab": the retained view got
+                // onDestroy()-ed, and every return re-attached a dead map (the
+                // permanently blank, uninteractible navy screen). The retained
+                // view lives for the process; Android reclaims it at death.
+                Lifecycle.Event.ON_DESTROY -> Unit
                 else -> Unit
             }
         }
@@ -756,7 +765,7 @@ fun TacticalMap(
         update = {
             mapView.getMapAsync { map ->
                 map.getStyle { _ ->
-                    ContactMarkerRenderer.update(map, context, currentContacts)
+                    ContactMarkerRenderer.update(map, appContext, currentContacts)
                 }
             }
         },
