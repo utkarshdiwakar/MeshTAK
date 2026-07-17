@@ -69,6 +69,12 @@ open class MeshUtilApplication :
         super.onCreate()
         ContextServices.app = this
 
+        // MeshTAK: init the transplanted tactical map (MapLibre HTTP UA,
+        // localization, CoT→SIDC catalogue) and its host stores BEFORE the
+        // first MapView can compose.
+        soy.engindearing.omnitak.mobile.host.TacMapInit.init(this)
+        org.meshtastic.app.tacmap.MeshTakHostHolder.init(this)
+
         startKoin<AndroidKoinApp> {
             androidContext(this@MeshUtilApplication)
             workManagerFactory()

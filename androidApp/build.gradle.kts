@@ -245,6 +245,8 @@ dependencies {
     implementation(projects.feature.messaging)
     implementation(projects.feature.connections)
     implementation(projects.feature.map)
+    // MeshTAK: NodeCast tactical map transplant
+    implementation(projects.feature.tacmap)
     implementation(projects.feature.node)
     implementation(projects.feature.settings)
     implementation(projects.feature.discovery)

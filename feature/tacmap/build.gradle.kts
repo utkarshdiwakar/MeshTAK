@@ -10,8 +10,8 @@
  * verbatim (R class, BuildConfig, imports).
  */
 plugins {
+    // AGP 9 ships built-in Kotlin support — no org.jetbrains.kotlin.android.
     id("com.android.library")
-    id("org.jetbrains.kotlin.android")
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.kotlin.serialization)
 }
@@ -37,11 +37,6 @@ android {
     }
 }
 
-kotlin {
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-    }
-}
 
 dependencies {
     // Compose via the repo's CMP catalog entries so versions stay aligned

@@ -18,7 +18,10 @@ package org.meshtastic.app.map
 
 import org.meshtastic.core.ui.util.MapViewProvider
 
-fun getMapViewProvider(): MapViewProvider = FdroidMapViewProvider()
+// MeshTAK: the Map tab mounts the NodeCast tactical map instead of the
+// stock osmdroid view. The osmdroid impls stay for the secondary map
+// surfaces (node track / traceroute / discovery), which are unchanged.
+fun getMapViewProvider(): MapViewProvider = TacticalMapViewProvider()
 
 /** Site Planner (coverage-estimate) — the F-Droid map renders imported coverage as OSMdroid overlays (see #6138). */
 fun sitePlannerAvailable(): Boolean = true

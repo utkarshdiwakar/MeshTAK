@@ -1,0 +1,72 @@
+/*
+ * Copyright (c) 2026 MeshTAK contributors
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+package org.meshtastic.app.tacmap
+
+import android.app.Application
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import soy.engindearing.omnitak.mobile.data.CoTEvent
+import soy.engindearing.omnitak.mobile.data.DeviceHeadingProvider
+import soy.engindearing.omnitak.mobile.data.KmlVectorOverlayStore
+import soy.engindearing.omnitak.mobile.data.LocationProvider
+import soy.engindearing.omnitak.mobile.data.MBTilesOverlayStore
+import soy.engindearing.omnitak.mobile.data.RasterOverlayStore
+import soy.engindearing.omnitak.mobile.data.TAKServer
+import soy.engindearing.omnitak.mobile.data.UserPrefsStore
+import soy.engindearing.omnitak.mobile.data.offline.OfflineRegionStore
+import soy.engindearing.omnitak.mobile.domain.ConnectionState
+import soy.engindearing.omnitak.mobile.domain.ContactStore
+import soy.engindearing.omnitak.mobile.domain.DrawingStore
+import soy.engindearing.omnitak.mobile.domain.LocalMarkerStore
+import soy.engindearing.omnitak.mobile.domain.MapCameraStore
+import soy.engindearing.omnitak.mobile.host.MeshSendFacade
+import soy.engindearing.omnitak.mobile.host.TacMapHost
+import soy.engindearing.omnitak.mobile.host.TakServerFacade
+
+/**
+ * MeshTAK's implementation of the tactical map's host contract: the ported
+ * stores are constructed as-is; the TAK-server facade is inert (mesh-only
+ * app), and the mesh facade is a Phase-2 seam that will route through the
+ * Meshtastic radio send (port-78 TAKPacketV2).
+ */
+class MeshTakHost(app: Application) : TacMapHost {
+    override val userPrefsStore = UserPrefsStore(app)
+    override val contactStore = ContactStore()
+    override val drawingStore = DrawingStore()
+    override val localMarkerStore = LocalMarkerStore(app)
+    override val mapCameraStore = MapCameraStore(userPrefsStore)
+    override val locationProvider = LocationProvider(app)
+    override val headingProvider = DeviceHeadingProvider(app)
+    override val kmlOverlayStore = KmlVectorOverlayStore(app)
+    override val mbtilesOverlayStore = MBTilesOverlayStore(app)
+    override val rasterOverlayStore = RasterOverlayStore(app)
+    override val offlineRegionStore = OfflineRegionStore(app)
+
+    override val serverManager: TakServerFacade = object : TakServerFacade {
+        override val activeServer: StateFlow<TAKServer?> = MutableStateFlow(null)
+        override val servers: StateFlow<List<TAKServer>> = MutableStateFlow(emptyList())
+        override val connectedServerIds: StateFlow<Set<String>> = MutableStateFlow(emptySet())
+        override val connectionState: StateFlow<ConnectionState> =
+            MutableStateFlow(ConnectionState.Disconnected)
+        override suspend fun sendCoT(xml: String, serverId: String?): Boolean = false
+    }
+
+    override val activeMeshManager: MeshSendFacade = object : MeshSendFacade {
+        // Phase 2: encode via TakPacketV2Codec and transmit through the
+        // Meshtastic radio service. Until then a dropped marker stays local.
+        override suspend fun sendCoTOverMesh(event: CoTEvent, channelIndex: UInt): Boolean = false
+    }
+}
+
+/** Process-wide holder — initialized once from Application.onCreate. */
+object MeshTakHostHolder {
+    @Volatile lateinit var host: MeshTakHost
+        private set
+
+    fun init(app: Application) {
+        if (::host.isInitialized) return
+        host = MeshTakHost(app)
+    }
+}

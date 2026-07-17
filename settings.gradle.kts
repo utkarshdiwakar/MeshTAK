@@ -123,6 +123,8 @@ include(
     ":feature:connections",
     ":feature:map",
     ":feature:node",
+    // MeshTAK: NodeCast tactical map transplant (plain Android library).
+    ":feature:tacmap",
     ":feature:settings",
     ":feature:discovery",
     ":feature:docs",
