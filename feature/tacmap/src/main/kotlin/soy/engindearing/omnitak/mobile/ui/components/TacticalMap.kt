@@ -445,9 +445,9 @@ fun TacticalMap(
     DisposableEffect(mapView, recenterTrigger) {
         if (recenterTrigger != null && locationEnabled) {
             mapView.getMapAsync { map ->
-                if (map.locationComponent.isLocationComponentActivated) {
-                    map.locationComponent.cameraMode = CameraMode.TRACKING
-                    map.locationComponent.zoomWhileTracking(15.0)
+                map.withStableLocationComponent { lc ->
+                    lc.cameraMode = CameraMode.TRACKING
+                    lc.zoomWhileTracking(15.0)
                 }
             }
         }
@@ -628,9 +628,7 @@ fun TacticalMap(
         val target = panTarget
         if (panTargetTick > 0 && target != null) {
             mapView.getMapAsync { map ->
-                if (map.locationComponent.isLocationComponentActivated) {
-                    map.locationComponent.cameraMode = CameraMode.NONE
-                }
+                map.withStableLocationComponent { lc -> lc.cameraMode = CameraMode.NONE }
                 map.animateCamera(
                     CameraUpdateFactory.newLatLngZoom(target, 14.0),
                     600,
@@ -645,8 +643,8 @@ fun TacticalMap(
     DisposableEffect(mapView, followMeActive, locationEnabled) {
         if (locationEnabled) {
             mapView.getMapAsync { map ->
-                if (map.locationComponent.isLocationComponentActivated) {
-                    map.locationComponent.cameraMode = if (followMeActive) {
+                map.withStableLocationComponent { lc ->
+                    lc.cameraMode = if (followMeActive) {
                         CameraMode.TRACKING_COMPASS
                     } else {
                         CameraMode.NONE
@@ -670,15 +668,13 @@ fun TacticalMap(
                     // rebuilt. Re-enable on every resume, restoring the
                     // camera mode follow-me expects.
                     if (currentLocationEnabled) {
-                        runCatching {
-                            mapView.getMapAsync { map ->
-                                if (map.locationComponent.isLocationComponentActivated) {
-                                    map.locationComponent.isLocationComponentEnabled = true
-                                    map.locationComponent.renderMode = RenderMode.COMPASS
-                                    map.locationComponent.cameraMode =
-                                        if (currentFollowMe) CameraMode.TRACKING_COMPASS
-                                        else CameraMode.NONE
-                                }
+                        mapView.getMapAsync { map ->
+                            map.withStableLocationComponent { lc ->
+                                lc.isLocationComponentEnabled = true
+                                lc.renderMode = RenderMode.COMPASS
+                                lc.cameraMode =
+                                    if (currentFollowMe) CameraMode.TRACKING_COMPASS
+                                    else CameraMode.NONE
                             }
                         }
                     }
@@ -969,6 +965,29 @@ private const val SELF_FOREGROUND_STALE_IMAGE = "omnitak-self-milstd-foreground-
 /** Stale self-marker opacity (0–255). ~45% — subtle, but unmistakably
  *  dimmer than the live marker (issue #75). */
 private const val STALE_MARKER_ALPHA = 115
+
+/**
+ * Run a location-component mutation only when it is safe to touch the style.
+ *
+ * The location component's setCameraMode / setRenderMode / applyStyle /
+ * zoomWhileTracking all start MapLibre camera animators whose FIRST frame runs
+ * SYNCHRONOUSLY inside the call and refreshes the location GeoJSON source via
+ * getSourceAs. Against a style that is mid-reload or has been superseded — which
+ * happens constantly under the Compose Multiplatform host, where leaving and
+ * re-entering the Map tab re-runs every remembered DisposableEffect while the
+ * retained MapView's style is momentarily unstable — that throws
+ *   IllegalStateException: Calling getSourceAs when a newer style is loading.
+ * The isFullyLoaded gate skips the common case; runCatching contains the
+ * residual race (the animation simply doesn't play that once — cosmetic).
+ */
+private inline fun org.maplibre.android.maps.MapLibreMap.withStableLocationComponent(
+    block: (org.maplibre.android.location.LocationComponent) -> Unit,
+) {
+    if (style?.isFullyLoaded == true && locationComponent.isLocationComponentActivated) {
+        runCatching { block(locationComponent) }
+            .onFailure { android.util.Log.w("TacticalMap", "location mutation raced a style reload: ${it.message}") }
+    }
+}
 
 @SuppressLint("MissingPermission")
 private fun safeEnableLocation(map: org.maplibre.android.maps.MapLibreMap) {
