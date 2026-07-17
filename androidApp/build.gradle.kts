@@ -203,7 +203,9 @@ ksp { arg("appfunctions:aggregateAppFunctions", "true") }
 
 androidComponents {
     onVariants(selector().withBuildType("debug")) { variant ->
-        variant.flavorName?.let { flavor -> variant.applicationId.set("com.geeksville.mesh.$flavor.debug") }
+        // MeshTAK fork: keep debug ids under the fork's namespace so neither
+        // release nor debug collides with an installed upstream Meshtastic.
+        variant.flavorName?.let { flavor -> variant.applicationId.set("com.meshtak.app.$flavor.debug") }
     }
 
     onVariants(selector().withBuildType("release")) { variant ->

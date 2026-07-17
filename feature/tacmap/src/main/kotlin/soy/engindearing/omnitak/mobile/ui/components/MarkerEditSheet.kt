@@ -1,0 +1,592 @@
+package soy.engindearing.omnitak.mobile.ui.components
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import org.maplibre.android.geometry.LatLng
+import soy.engindearing.omnitak.mobile.data.CoTAffiliation
+import soy.engindearing.omnitak.mobile.ui.theme.TacticalAccent
+import soy.engindearing.omnitak.mobile.ui.theme.TacticalBackground
+import soy.engindearing.omnitak.mobile.ui.theme.TacticalSurface
+
+/** Result payload emitted when the user saves a marker sheet. */
+data class MarkerEditResult(
+    val callsign: String,
+    val affiliation: CoTAffiliation,
+    val altitudeMeters: Double?,
+    val remarks: String,
+    /**
+     * Issue #98 — the full CoT type the operator chose from the icon
+     * picker (e.g. `a-h-G-U-C-A`, or `b-m-p-s-m` for a Spot Map point). Null
+     * means "no specific symbol was picked" — the caller falls back to a
+     * generic per-affiliation point (`a-<aff>-G-U-C`), preserving the
+     * pre-icon-suite behavior.
+     */
+    val cotType: String?,
+    /**
+     * Issue #98 — `<usericon iconsetpath>` for the chosen icon when it belongs
+     * to a standard TAK icon set (Spot Map today). Null for MIL-STD-2525 picks.
+     * Emitted on the wire so peers render the identical glyph.
+     */
+    val iconsetPath: String? = null,
+    /** 8-hex opaque ARGB for the CoT `<color argb>` element (Spot Map swatch).
+     *  Null for MIL-STD picks, which carry their look in the symbol itself. */
+    val argbHex: String? = null,
+    /** Course heading in degrees (0–360), or null if not set. */
+    val courseHeading: Double? = null,
+    /** When editingSelf, the new latitude the operator typed. */
+    val selfLatOverride: Double? = null,
+    /** When editingSelf, the new longitude the operator typed. */
+    val selfLonOverride: Double? = null,
+)
+
+/**
+ * Bottom sheet for editing a newly-dropped or existing point marker.
+ * Fields shipped in this slice: callsign + affiliation. Remarks and
+ * altitude arrive in the full marker-edit UI (Slice 11).
+ *
+ * [initialCallsign] seeds the input; [latLng] is shown read-only so the
+ * operator can sanity-check where the marker will land.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+fun MarkerEditSheet(
+    visible: Boolean,
+    latLng: LatLng?,
+    initialCallsign: String = "",
+    initialAffiliation: CoTAffiliation = CoTAffiliation.FRIEND,
+    initialAltitude: Double? = null,
+    initialRemarks: String = "",
+    /** Issue #98 — the marker's current CoT type, so an existing marker
+     *  re-opens with the symbol it already carries. Null = no specific
+     *  symbol picked yet (generic per-affiliation point). */
+    initialCotType: String? = null,
+    /** Issue #98 — the marker's current `usericon` iconset path (Spot Map),
+     *  so an existing spot marker re-opens with its swatch highlighted. */
+    initialIconsetPath: String? = null,
+    /** Current course heading in degrees for this marker. */
+    initialCourseHeading: Double? = null,
+    editing: Boolean = false,
+    /** #178 / #180 — the live contact this sheet is editing, when it's an
+     *  existing received/dropped contact (null for a brand-new dropped marker).
+     *  Used only to surface read-only metadata (point age + data source); none
+     *  of its fields drive the editable form. */
+    contact: soy.engindearing.omnitak.mobile.data.CoTEvent? = null,
+    /** When true, shows lat/lon override fields (for self-marker repositioning). */
+    editingSelf: Boolean = false,
+    /** Initial latitude for self-position editing. */
+    initialSelfLat: Double? = null,
+    /** Initial longitude for self-position editing. */
+    initialSelfLon: Double? = null,
+    onSave: (MarkerEditResult) -> Unit,
+    onDelete: (() -> Unit)? = null,
+    /** When non-null, renders a "Pursue with UAS" button — Map screen
+     *  supplies this only when (a) the marker is an existing contact
+     *  (editing=true), and (b) a UAS is currently connected. */
+    onPursueWithUas: (() -> Unit)? = null,
+    onDismiss: () -> Unit,
+) {
+    if (!visible) return
+    // Partial detent + light scrim keep the map visible above the sheet — edit
+    // a marker while still seeing where it sits. Drag up for the full form.
+    val state = rememberModalBottomSheetState()
+
+    var callsign by remember(initialCallsign) { mutableStateOf(initialCallsign) }
+    var affiliation by remember(initialAffiliation) { mutableStateOf(initialAffiliation) }
+    var altitudeText by remember(initialAltitude) {
+        mutableStateOf(initialAltitude?.let { "%.0f".format(it) } ?: "")
+    }
+    var remarks by remember(initialRemarks) { mutableStateOf(initialRemarks) }
+    // Issue #98 — selected CoT type from the icon picker. Null until the
+    // operator picks a specific symbol; the affiliation chips below keep it
+    // re-affiliated so picking "armor" then flipping to hostile yields the
+    // hostile-armor symbol without re-opening the picker.
+    var cotType by remember(initialCotType) { mutableStateOf(initialCotType) }
+    // Issue #98 — Spot Map `usericon` path + swatch colour, when the operator
+    // picked a TAK-suite icon rather than a MIL-STD symbol. Cleared whenever a
+    // MIL-STD symbol or an affiliation chip is chosen so the two stay coherent.
+    var iconsetPath by remember(initialIconsetPath) { mutableStateOf(initialIconsetPath) }
+    var argbHex by remember(initialIconsetPath) {
+        mutableStateOf(
+            initialIconsetPath?.let {
+                soy.engindearing.omnitak.mobile.data.symbology.TakIconRegistry.SpotIcon
+                    .fromIconsetPath(it)?.argbHex
+            },
+        )
+    }
+    var iconPickerOpen by remember { mutableStateOf(false) }
+    var headingText by remember(initialCourseHeading) { mutableStateOf(initialCourseHeading?.let { "%.0f".format(it) } ?: "") }
+    var selfLatText by remember(initialSelfLat) { mutableStateOf(initialSelfLat?.let { "%.6f".format(it) } ?: "") }
+    var selfLonText by remember(initialSelfLon) { mutableStateOf(initialSelfLon?.let { "%.6f".format(it) } ?: "") }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = state,
+        containerColor = TacticalSurface,
+        scrimColor = Color.Black.copy(alpha = 0.3f),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 8.dp),
+        ) {
+            Text(
+                if (editing) "Edit Marker" else "Drop Marker",
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleLarge,
+            )
+
+            Spacer(Modifier.height(4.dp))
+            latLng?.let {
+                Text(
+                    rememberCoordText(it.latitude, it.longitude),
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+
+            // #178 / #180 — read-only point metadata. Age tells the operator how
+            // old the position is ("4m ago") so a stale fix isn't taken at face
+            // value; Source shows how the point arrived (TAK server vs which mesh)
+            // for comms debugging. Both only render for an existing contact.
+            ContactMetaRows(contact)
+
+            Spacer(Modifier.height(16.dp))
+            OutlinedTextField(
+                value = callsign,
+                onValueChange = { callsign = it },
+                label = { Text("Callsign") },
+                singleLine = true,
+                colors = TextFieldDefaults.colors(
+                    focusedTextColor = MaterialTheme.colorScheme.onBackground,
+                    unfocusedTextColor = MaterialTheme.colorScheme.onBackground,
+                    focusedContainerColor = TacticalBackground,
+                    unfocusedContainerColor = TacticalBackground,
+                    focusedIndicatorColor = TacticalAccent,
+                    unfocusedIndicatorColor = TacticalAccent.copy(alpha = 0.4f),
+                    focusedLabelColor = TacticalAccent,
+                    unfocusedLabelColor = TacticalAccent.copy(alpha = 0.6f),
+                    cursorColor = TacticalAccent,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "Affiliation",
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.labelLarge,
+            )
+            Spacer(Modifier.height(8.dp))
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                listOf(
+                    CoTAffiliation.FRIEND,
+                    CoTAffiliation.HOSTILE,
+                    CoTAffiliation.NEUTRAL,
+                    CoTAffiliation.UNKNOWN,
+                ).forEach { a ->
+                    AffiliationChip(
+                        affiliation = a,
+                        selected = affiliation == a,
+                        onClick = {
+                            affiliation = a
+                            // Fold the pick into any atom (a-…) type — including
+                            // custom-icon markers, whose glyph rides iconsetPath
+                            // independently of the type, so the affiliation
+                            // actually transmits over CoT/mesh (it used to stay
+                            // hardcoded a-u-G and every peer saw "Unknown").
+                            // Spot Map points (b-m-p-s-m) are affiliation-
+                            // agnostic and skipped by the a- check.
+                            cotType = cotType?.let {
+                                if (it.startsWith("a-")) {
+                                    soy.engindearing.omnitak.mobile.data.symbology
+                                        .MilStdIconService.withAffiliation(it, a.code)
+                                } else it
+                            }
+                        },
+                    )
+                }
+            }
+
+            // Issue #98 — symbol / icon row. Tapping opens the MIL-STD-2525
+            // picker; the chosen CoT type rides into the result so the placed
+            // marker resolves to that exact symbol (same path received markers
+            // use). When nothing is picked the marker stays a generic
+            // per-affiliation point — the pre-icon-suite behavior.
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "Symbol",
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.labelLarge,
+            )
+            Spacer(Modifier.height(8.dp))
+            MarkerSymbolRow(
+                cotType = cotType,
+                iconsetPath = iconsetPath,
+                onClick = { iconPickerOpen = true },
+            )
+
+            Spacer(Modifier.height(16.dp))
+            OutlinedTextField(
+                value = altitudeText,
+                onValueChange = { altitudeText = it.filter { ch -> ch.isDigit() || ch == '.' || ch == '-' } },
+                label = { Text("Altitude (m HAE)") },
+                singleLine = true,
+                colors = tacticalFieldColors(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
+                value = remarks,
+                onValueChange = { remarks = it },
+                label = { Text("Remarks") },
+                colors = tacticalFieldColors(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(96.dp),
+            )
+
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
+                value = headingText,
+                onValueChange = { headingText = it.filter { ch -> ch.isDigit() || ch == '.' } },
+                label = { Text("Heading (°)") },
+                singleLine = true,
+                colors = tacticalFieldColors(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            if (editingSelf) {
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = selfLatText,
+                    onValueChange = { selfLatText = it.filter { ch -> ch.isDigit() || ch == '.' || ch == '-' } },
+                    label = { Text("Latitude") },
+                    singleLine = true,
+                    colors = tacticalFieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = selfLonText,
+                    onValueChange = { selfLonText = it.filter { ch -> ch.isDigit() || ch == '.' || ch == '-' } },
+                    label = { Text("Longitude") },
+                    singleLine = true,
+                    colors = tacticalFieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            Spacer(Modifier.height(24.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (editing && onDelete != null) {
+                    TextButton(
+                        onClick = onDelete,
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = soy.engindearing.omnitak.mobile.ui.theme.HostileRed,
+                        ),
+                    ) { Text("Delete") }
+                }
+                if (onPursueWithUas != null) {
+                    TextButton(
+                        onClick = onPursueWithUas,
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = androidx.compose.ui.graphics.Color(0xFF00E5FF),
+                        ),
+                    ) { Text("Pursue with UAS") }
+                }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = {
+                        val selfLat = selfLatText.toDoubleOrNull()
+                        val selfLon = selfLonText.toDoubleOrNull()
+                        onSave(
+                            MarkerEditResult(
+                                callsign = callsign.trim().ifEmpty { "Marker" },
+                                affiliation = affiliation,
+                                altitudeMeters = altitudeText.toDoubleOrNull(),
+                                remarks = remarks.trim(),
+                                cotType = cotType,
+                                iconsetPath = iconsetPath,
+                                argbHex = argbHex,
+                                courseHeading = headingText.toDoubleOrNull(),
+                                selfLatOverride = if (editingSelf) selfLat else null,
+                                selfLonOverride = if (editingSelf) selfLon else null,
+                            )
+                        )
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = TacticalAccent,
+                        contentColor = TacticalBackground,
+                    ),
+                ) { Text(if (editing) "Save" else "Drop") }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+
+    // Issue #98 — TAK icon-suite picker (Spot Map + MIL-STD-2525). A MIL-STD
+    // pick sets the CoT type and snaps the affiliation chips to match the
+    // symbol's own affiliation; a Spot Map pick sets the iconset path + swatch
+    // and leaves affiliation alone (spot points are affiliation-agnostic).
+    MarkerIconPickerSheet(
+        visible = iconPickerOpen,
+        selectedCotType = cotType,
+        selectedIconsetPath = iconsetPath,
+        onPick = { choice ->
+            cotType = choice.cotType
+            iconsetPath = choice.iconsetPath
+            argbHex = choice.argbHex
+            // Only re-affiliate for MIL-STD symbols; Spot Map paths carry no
+            // affiliation in the CoT type (always b-m-p-s-m).
+            if (choice.iconsetPath == null) {
+                affiliation = CoTAffiliation.fromCode(choice.cotType.getOrNull(2))
+            }
+            iconPickerOpen = false
+        },
+        onDismiss = { iconPickerOpen = false },
+    )
+}
+
+/**
+ * Issue #98 — current-symbol row inside [MarkerEditSheet]. Shows the
+ * rendered MIL-STD glyph + label for the picked CoT type (or a "Choose
+ * symbol" prompt when none is picked) and opens the picker on tap.
+ */
+@Composable
+private fun MarkerSymbolRow(
+    cotType: String?,
+    iconsetPath: String?,
+    onClick: () -> Unit,
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    // Issue #98 — a Spot Map pick is shown as its coloured dot + name, not a
+    // MIL-STD glyph (its type is the affiliation-agnostic b-m-p-s-m).
+    val spot = remember(iconsetPath) {
+        iconsetPath?.let {
+            soy.engindearing.omnitak.mobile.data.symbology.TakIconRegistry.SpotIcon.fromIconsetPath(it)
+        }
+    }
+    val def = remember(cotType, spot) {
+        if (spot != null) null
+        else cotType?.let {
+            soy.engindearing.omnitak.mobile.data.symbology.MilStdIconService.getDefinition(it)
+        }
+    }
+    val bitmap by androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(
+        initialValue = null, cotType, spot,
+    ) {
+        value = if (cotType == null || spot != null) null
+        else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            soy.engindearing.omnitak.mobile.data.symbology.MilStdIconCache
+                .bitmapFor(context, cotType, sizePx = 72)
+                ?.asImageBitmap()
+        }
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(TacticalBackground)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.foundation.layout.Box(
+            Modifier.size(36.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            val bmp = bitmap
+            when {
+                spot != null -> androidx.compose.foundation.layout.Box(
+                    Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(spot.color)
+                        .border(1.dp, Color.Black.copy(alpha = 0.4f), CircleShape),
+                )
+                bmp != null -> androidx.compose.foundation.Image(
+                    bitmap = bmp,
+                    contentDescription = def?.label,
+                    modifier = Modifier.size(32.dp),
+                )
+                else -> androidx.compose.material3.Icon(
+                    imageVector = Icons.Filled.Category,
+                    contentDescription = null,
+                    tint = TacticalAccent.copy(alpha = 0.8f),
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            // Prefer the catalogue label; fall back to the raw type for a
+            // marker carrying a type the picker doesn't enumerate (e.g. a
+            // received RID track being re-typed), then to the prompt.
+            Text(
+                spot?.let { "Spot ${it.displayName}" } ?: def?.label ?: cotType ?: "Choose symbol",
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                iconsetPath ?: cotType ?: "Generic point (by affiliation)",
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        androidx.compose.material3.Icon(
+            imageVector = Icons.Filled.ChevronRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+        )
+    }
+}
+
+/**
+ * #178 / #180 — read-only metadata block under the coordinate line: point age
+ * (relative time, auto-refreshing) + data source label. Renders nothing when
+ * [contact] is null or carries no age/source (e.g. a never-ingested marker), so
+ * the Drop-Marker sheet for a fresh point stays unchanged.
+ */
+@Composable
+private fun ContactMetaRows(contact: soy.engindearing.omnitak.mobile.data.CoTEvent?) {
+    if (contact == null) return
+    // Tick once a second so "Ns ago" / "Nm ago" stays live while the sheet is open.
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    androidx.compose.runtime.LaunchedEffect(contact.uid) {
+        while (true) {
+            now = System.currentTimeMillis()
+            kotlinx.coroutines.delay(1_000L)
+        }
+    }
+    val age = soy.engindearing.omnitak.mobile.data.CoTAge.relative(contact.receivedAtMs, now)
+    val source = contact.source?.label
+
+    if (age != null || source != null) {
+        Spacer(Modifier.height(8.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            age?.let { ContactMetaRow(label = "Age", value = it) }
+            source?.let { ContactMetaRow(label = "Source", value = it) }
+        }
+    }
+}
+
+@Composable
+private fun ContactMetaRow(label: String, value: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "$label: ",
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(
+            value,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun tacticalFieldColors() = TextFieldDefaults.colors(
+    focusedTextColor = MaterialTheme.colorScheme.onBackground,
+    unfocusedTextColor = MaterialTheme.colorScheme.onBackground,
+    focusedContainerColor = TacticalBackground,
+    unfocusedContainerColor = TacticalBackground,
+    focusedIndicatorColor = TacticalAccent,
+    unfocusedIndicatorColor = TacticalAccent.copy(alpha = 0.4f),
+    focusedLabelColor = TacticalAccent,
+    unfocusedLabelColor = TacticalAccent.copy(alpha = 0.6f),
+    cursorColor = TacticalAccent,
+)
+
+@Composable
+private fun AffiliationChip(
+    affiliation: CoTAffiliation,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val color = Color(ContactLayer.previewColor(affiliation))
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(if (selected) color.copy(alpha = 0.25f) else TacticalBackground)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.foundation.layout.Box(
+            Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(color),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            affiliation.name.lowercase().replaceFirstChar { it.uppercase() },
+            color = if (selected) color else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            // A squeezed chip used to wrap one char per line into a tall
+            // pill that overflowed the section — never wrap.
+            maxLines = 1,
+            softWrap = false,
+        )
+    }
+}
