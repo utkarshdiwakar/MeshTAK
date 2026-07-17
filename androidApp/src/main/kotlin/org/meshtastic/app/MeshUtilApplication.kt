@@ -80,6 +80,11 @@ open class MeshUtilApplication :
             workManagerFactory()
         }
 
+        // MeshTAK Phase 2 — needs Koin up (NodeRepository/CommandSender/etc):
+        // start the mesh↔tactical-map bridges (nodes → contacts, waypoints →
+        // markers, port-78 TAKPacketV2 send/receive).
+        org.meshtastic.app.tacmap.MeshTakHostHolder.host.startMeshLink()
+
         // Schedule periodic MeshLog cleanup
         scheduleMeshLogCleanup()
 

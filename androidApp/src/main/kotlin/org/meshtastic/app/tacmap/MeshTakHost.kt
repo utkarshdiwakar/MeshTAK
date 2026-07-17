@@ -7,6 +7,7 @@ package org.meshtastic.app.tacmap
 import android.app.Application
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import soy.engindearing.omnitak.mobile.data.CoTEvent
 import soy.engindearing.omnitak.mobile.data.DeviceHeadingProvider
 import soy.engindearing.omnitak.mobile.data.KmlVectorOverlayStore
@@ -53,10 +54,38 @@ class MeshTakHost(app: Application) : TacMapHost {
         override suspend fun sendCoT(xml: String, serverId: String?): Boolean = false
     }
 
+    /** Phase 2 — the live mesh link. Null until [startMeshLink] runs (which
+     *  must be AFTER startKoin; this host is constructed before Koin). */
+    @Volatile private var meshLink: TacMeshLink? = null
+    @Volatile private var selfUidCache: String = ""
+    private val hostScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default,
+    )
+
     override val activeMeshManager: MeshSendFacade = object : MeshSendFacade {
-        // Phase 2: encode via TakPacketV2Codec and transmit through the
-        // Meshtastic radio service. Until then a dropped marker stays local.
-        override suspend fun sendCoTOverMesh(event: CoTEvent, channelIndex: UInt): Boolean = false
+        override suspend fun sendCoTOverMesh(event: CoTEvent, channelIndex: UInt): Boolean =
+            meshLink?.send(event) ?: false
+    }
+
+    /** Resolve the Meshtastic repositories from Koin and start the bridges
+     *  (nodes → contacts, waypoints → markers, port-78 RX). Idempotent. */
+    fun startMeshLink() {
+        if (meshLink != null) return
+        // Mint + cache the stable self uid (ANDROID-<uuid>) so the RX
+        // self-echo filter has a non-suspending identity to compare against.
+        hostScope.launch {
+            userPrefsStore.ensureSelfUid()
+            userPrefsStore.prefs.collect { selfUidCache = it.selfUid }
+        }
+        val koin = org.koin.core.context.GlobalContext.get()
+        meshLink = TacMeshLink(
+            contactStore = contactStore,
+            selfUidProvider = { selfUidCache },
+            nodeRepository = koin.get(),
+            packetRepository = koin.get(),
+            serviceRepository = koin.get(),
+            commandSender = koin.get(),
+        ).also { it.start() }
     }
 }
 
