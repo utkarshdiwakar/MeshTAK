@@ -223,7 +223,14 @@ fun TacticalMap(
                 map.uiSettings.apply {
                     isCompassEnabled = true
                     isLogoEnabled = false
-                    isAttributionEnabled = true
+                    // MeshTAK: disable MapLibre's built-in attribution "ⓘ"
+                    // dialog. Under the Compose Multiplatform host the MapView's
+                    // context doesn't resolve to an Activity window token, so
+                    // tapping it threw BadTokenException ("token null is not
+                    // valid"). Basemap attribution is carried in the style JSON
+                    // and belongs in an About screen (Phase 5) rather than this
+                    // crash-prone popup.
+                    isAttributionEnabled = false
                     // Issue #81 — push the compass below the ATAKStatusBar.
                     // setCompassMargins(left, top, right, bottom) takes raw
                     // pixels; 4 dp matches MapLibre's built-in side defaults
@@ -357,10 +364,14 @@ fun TacticalMap(
                 addOnDidFinishLoadingStyleListener {
                     getMapAsync { map ->
                         map.getStyle { style ->
-                            ContactMarkerRenderer.update(map, context, bindings.contacts)
-                            MeasurementLayer.update(map, currentMeasurementPoints)
-                            DrawingShapeRenderer.apply(map, currentDrawings)
-                            currentGridCenter?.let { GridLayer.update(map, it) }
+                            // Contain a source-access race if yet another style
+                            // load starts before this fully-loaded callback runs.
+                            runCatching {
+                                ContactMarkerRenderer.update(map, context, bindings.contacts)
+                                MeasurementLayer.update(map, currentMeasurementPoints)
+                                DrawingShapeRenderer.apply(map, currentDrawings)
+                                currentGridCenter?.let { GridLayer.update(map, it) }
+                            }
                         }
                     }
                 }
@@ -374,12 +385,17 @@ fun TacticalMap(
         if (locationEnabled) {
             mapView.getMapAsync { map ->
                 val style = map.style
-                if (style != null && !map.locationComponent.isLocationComponentActivated) {
-                    activateLocation(
-                        map, style, context, currentUseMilStd, currentTeamColor,
-                        seedFix = currentSelfFix, puck = puckAppearance,
-                        selfMarkerTriangle = currentSelfMarkerTriangle,
-                    )
+                // isFullyLoaded gate: activateLocation registers puck images and
+                // sources on the style; doing that against a superseded style
+                // reload throws the getSourceAs IllegalStateException.
+                if (style?.isFullyLoaded == true && !map.locationComponent.isLocationComponentActivated) {
+                    runCatching {
+                        activateLocation(
+                            map, style, context, currentUseMilStd, currentTeamColor,
+                            seedFix = currentSelfFix, puck = puckAppearance,
+                            selfMarkerTriangle = currentSelfMarkerTriangle,
+                        )
+                    }
                 }
                 if (map.locationComponent.isLocationComponentActivated) {
                     safeEnableLocation(map)
@@ -401,19 +417,21 @@ fun TacticalMap(
         if (fix != null && locationEnabled) {
             mapView.getMapAsync { map ->
                 val style = map.style
-                if (style != null && map.locationComponent.isLocationComponentActivated) {
-                    map.locationComponent.forceLocationUpdate(fix.toLocation())
-                    val staleNow =
-                        SelfFixPersistence.isStale(fix.timeMs, System.currentTimeMillis())
-                    if (puckAppearance.dimmed != staleNow) {
-                        map.locationComponent.applyStyle(
-                            buildPuckOptions(
-                                context, style, currentUseMilStd, currentTeamColor,
-                                dimmed = staleNow,
-                                selfMarkerTriangle = currentSelfMarkerTriangle,
-                            ),
-                        )
-                        puckAppearance.dimmed = staleNow
+                if (style?.isFullyLoaded == true && map.locationComponent.isLocationComponentActivated) {
+                    runCatching {
+                        map.locationComponent.forceLocationUpdate(fix.toLocation())
+                        val staleNow =
+                            SelfFixPersistence.isStale(fix.timeMs, System.currentTimeMillis())
+                        if (puckAppearance.dimmed != staleNow) {
+                            map.locationComponent.applyStyle(
+                                buildPuckOptions(
+                                    context, style, currentUseMilStd, currentTeamColor,
+                                    dimmed = staleNow,
+                                    selfMarkerTriangle = currentSelfMarkerTriangle,
+                                ),
+                            )
+                            puckAppearance.dimmed = staleNow
+                        }
                     }
                 }
             }
@@ -537,13 +555,15 @@ fun TacticalMap(
                     // the puck survives style reloads with its current
                     // (dimmed or live) appearance.
                     if (currentLocationEnabled && map.locationComponent.isLocationComponentActivated) {
-                        map.locationComponent.applyStyle(
-                            buildPuckOptions(
-                                context, style, currentUseMilStd, currentTeamColor,
-                                dimmed = puckAppearance.dimmed,
-                                selfMarkerTriangle = currentSelfMarkerTriangle,
-                            ),
-                        )
+                        runCatching {
+                            map.locationComponent.applyStyle(
+                                buildPuckOptions(
+                                    context, style, currentUseMilStd, currentTeamColor,
+                                    dimmed = puckAppearance.dimmed,
+                                    selfMarkerTriangle = currentSelfMarkerTriangle,
+                                ),
+                            )
+                        }
                     }
                     currentStyleReady?.invoke(map, style)
                     // Apply 3D tilt AFTER the style (which carries the
@@ -562,25 +582,37 @@ fun TacticalMap(
         onDispose { }
     }
 
+    // These overlay renderers read GeoJSON sources via getSourceAs, which
+    // throws IllegalStateException against a superseded style. `map.style !=
+    // null` is insufficient — a style mid-reload is non-null but invalid — so
+    // gate on isFullyLoaded and contain the residual race (the setStyle
+    // onLoaded callback re-pushes every layer, so a swallowed update is a
+    // harmless no-op). This is the path that crashed "while drawing".
     DisposableEffect(mapView, measurementPoints) {
         mapView.getMapAsync { map ->
-            if (map.style != null) MeasurementLayer.update(map, measurementPoints)
+            if (map.style?.isFullyLoaded == true) {
+                runCatching { MeasurementLayer.update(map, measurementPoints) }
+            }
         }
         onDispose { }
     }
 
     DisposableEffect(mapView, drawings) {
         mapView.getMapAsync { map ->
-            if (map.style != null) DrawingShapeRenderer.apply(map, drawings)
+            if (map.style?.isFullyLoaded == true) {
+                runCatching { DrawingShapeRenderer.apply(map, drawings) }
+            }
         }
         onDispose { }
     }
 
     DisposableEffect(mapView, gridCenter) {
         mapView.getMapAsync { map ->
-            if (map.style != null) {
-                val c = gridCenter
-                if (c != null) GridLayer.update(map, c) else GridLayer.clear(map)
+            if (map.style?.isFullyLoaded == true) {
+                runCatching {
+                    val c = gridCenter
+                    if (c != null) GridLayer.update(map, c) else GridLayer.clear(map)
+                }
             }
         }
         onDispose { }
@@ -940,9 +972,20 @@ private const val STALE_MARKER_ALPHA = 115
 
 @SuppressLint("MissingPermission")
 private fun safeEnableLocation(map: org.maplibre.android.maps.MapLibreMap) {
-    map.locationComponent.isLocationComponentEnabled = true
-    map.locationComponent.renderMode = RenderMode.COMPASS
-    map.locationComponent.cameraMode = CameraMode.NONE
+    // Only touch the location component when the style is fully loaded and not
+    // mid-reload. setRenderMode internally refreshes the location source; if a
+    // newer style is loading, MapLibre throws
+    //   IllegalStateException: Calling getSourceAs when a newer style is loading
+    // Under the Compose Multiplatform host, effect re-runs race style reloads
+    // far more often than in NodeCast's single-Activity host, so this gate +
+    // runCatching is load-bearing (the next onStyleLoaded callback re-applies
+    // the puck cleanly, so a swallowed race is a harmless no-op).
+    if (map.style?.isFullyLoaded != true) return
+    runCatching {
+        map.locationComponent.isLocationComponentEnabled = true
+        map.locationComponent.renderMode = RenderMode.COMPASS
+        map.locationComponent.cameraMode = CameraMode.NONE
+    }.onFailure { android.util.Log.w("TacticalMap", "safeEnableLocation raced a style reload: ${it.message}") }
 }
 
 /**
