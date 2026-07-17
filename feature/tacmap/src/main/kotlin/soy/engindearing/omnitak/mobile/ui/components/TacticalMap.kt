@@ -180,7 +180,17 @@ fun TacticalMap(
     val mapView = remember {
         RetainedMapView.acquire(appContext) { ctx ->
             MapLibre.getInstance(ctx)
-            MapView(ctx).apply {
+            // MeshTAK: TextureView rendering, not the default SurfaceView. The
+            // retained MapView is detached/re-attached on every bottom-nav tab
+            // switch under the Compose Multiplatform host; a SurfaceView's
+            // surface is destroyed on detach and does not reliably recreate on
+            // re-attach (map came back permanently BLACK after draw → tab
+            // away → return). A TextureView is an ordinary view that survives
+            // re-parenting, at a small compositing cost.
+            val options = org.maplibre.android.maps.MapLibreMapOptions
+                .createFromAttributes(ctx)
+                .textureMode(true)
+            MapView(ctx, options).apply {
                 onCreate(null)
                 getMapAsync { map ->
                     // Issue #16 — hand the map reference up to the caller
