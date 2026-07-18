@@ -81,6 +81,7 @@ class MeshTakHost(app: Application) : TacMapHost {
         meshLink = TacMeshLink(
             contactStore = contactStore,
             selfUidProvider = { selfUidCache },
+            locationProvider = locationProvider,
             nodeRepository = koin.get(),
             packetRepository = koin.get(),
             serviceRepository = koin.get(),

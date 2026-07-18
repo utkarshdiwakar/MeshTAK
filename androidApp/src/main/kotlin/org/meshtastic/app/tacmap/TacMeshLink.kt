@@ -49,6 +49,7 @@ import soy.engindearing.omnitak.mobile.domain.MeshCoTRouter
 class TacMeshLink(
     private val contactStore: ContactStore,
     private val selfUidProvider: () -> String,
+    private val locationProvider: soy.engindearing.omnitak.mobile.data.LocationProvider,
     private val nodeRepository: NodeRepository,
     private val packetRepository: PacketRepository,
     private val serviceRepository: ServiceRepository,
@@ -136,6 +137,39 @@ class TacMeshLink(
                     }
                 }
         }
+        // Phone-GPS PLI over port 78 — the NodeCast off-grid broadcaster's
+        // role. Indispensable when the radios' own GPS has no fix (indoors):
+        // node-table positions stay empty, so peers only see each other via
+        // this phone-position broadcast. Callsign is the Meshtastic OWNER
+        // long name (one identity across chat / node list / map); uid is the
+        // stable per-install ANDROID-<uuid>, which peers dedupe on and the
+        // self-echo filter drops when it bounces back.
+        scope.launch {
+            // Kick the fused-location engine in case the Map tab (whose
+            // permission gate normally starts it) hasn't composed yet.
+            // No-ops safely when location permission isn't granted yet.
+            runCatching { locationProvider.start() }
+            while (true) {
+                kotlinx.coroutines.delay(PLI_INTERVAL_MS)
+                val uid = selfUidProvider()
+                if (uid.isBlank()) continue
+                if (serviceRepository.connectionState.value != ConnectionState.Connected) continue
+                val fix = locationProvider.effectiveFix() ?: continue
+                val callsign = nodeRepository.ourNodeInfo.value?.user?.long_name
+                    ?.takeIf { it.isNotBlank() } ?: "MeshTAK"
+                val sent = send(
+                    CoTEvent(
+                        uid = uid,
+                        type = "a-f-G-U-C",
+                        lat = fix.lat,
+                        lon = fix.lon,
+                        hae = fix.altitudeM,
+                        callsign = callsign,
+                    ),
+                )
+                if (sent) log.d { "PLI sent — $callsign @ ${fix.lat},${fix.lon}" }
+            }
+        }
         log.i { "TacMeshLink collectors started" }
     }
 
@@ -186,6 +220,10 @@ class TacMeshLink(
 
     companion object {
         private const val WAYPOINT_STALE_MS = 3_600_000L
+
+        /** PLI cadence — 30 s, the ATAK convention NodeCast used; LoRa
+         *  airtime stays negligible at this rate. */
+        private const val PLI_INTERVAL_MS = 30_000L
 
         /** Marker CoT families that ride encodeMarker — mirrors NodeCast's
          *  MeshtasticManager.isTacticalMarker (bare PLI stays on encodePli). */
